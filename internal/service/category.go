@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 
 	"github.com/mariofelesdossantosjunior/sample-grpc/internal/database"
 	"github.com/mariofelesdossantosjunior/sample-grpc/internal/pb"
@@ -33,7 +34,7 @@ func (c *CategoryService) CreateCategory(ctx context.Context, in *pb.CreateCateg
 	return categoryResponse, nil
 }
 
-func (c *CategoryService) ListCategories(ctx context.Context, in *pb.Blank) (*pb.CategoriesResponse, error) {
+func (c *CategoryService) ListCategories(ctx context.Context, in *pb.Blank) (*pb.CategoryList, error) {
 	categories, err := c.CategoryDB.FindAll()
 	if err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func (c *CategoryService) ListCategories(ctx context.Context, in *pb.Blank) (*pb
 		categoryResponses = append(categoryResponses, categoryResponse)
 	}
 
-	return &pb.CategoriesResponse{Categories: categoryResponses}, nil
+	return &pb.CategoryList{Categories: categoryResponses}, nil
 }
 
 func (c *CategoryService) GetCategory(ctx context.Context, in *pb.CategoryId) (*pb.Category, error) {
@@ -65,4 +66,31 @@ func (c *CategoryService) GetCategory(ctx context.Context, in *pb.CategoryId) (*
 	}
 
 	return categoryResponse, nil
+}
+
+func (c *CategoryService) CreateCategoryStream(stream pb.CategoryService_CreateCategoryStreamServer) error {
+	categories := &pb.CategoryList{}
+
+	for {
+		category, err := stream.Recv()
+
+		if err == io.EOF {
+			return stream.SendAndClose(categories)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		categoryResult, err := c.CategoryDB.Create(category.Name, category.Description)
+		if err != nil {
+			return err
+		}
+
+		categories.Categories = append(categories.Categories, &pb.Category{
+			Id:          categoryResult.ID,
+			Name:        categoryResult.Name,
+			Description: categoryResult.Description,
+		})
+	}
 }

@@ -19,7 +19,7 @@ message CategoryResponse {
   Category category = 1;
 }
 
-message CategoriesResponse {
+message CategoryList {
   repeated Category categories = 1;
 }
 
@@ -29,6 +29,7 @@ message CategoryId {
 
 service CategoryService {
   rpc CreateCategory(CreateCategoryRequest) returns (Category){}
-  rpc ListCategories(blank) returns (CategoriesResponse){}
+  rpc CreateCategoryStream(stream CreateCategoryRequest) returns (CategoryList){}
+  rpc ListCategories(blank) returns (CategoryList){}
   rpc GetCategory(CategoryId) returns (Category){}
 }
