@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"io"
+	"sync"
 
 	"github.com/mariofelesdossantosjunior/sample-grpc/internal/database"
 	"github.com/mariofelesdossantosjunior/sample-grpc/internal/pb"
@@ -10,14 +11,15 @@ import (
 
 type CategoryService struct {
 	pb.UnimplementedCategoryServiceServer
-	CategoryDB database.Category
-	updateCh   chan *pb.Category
+	CategoryDB  database.Category
+	subscribers map[chan *pb.Category]struct{}
+	mu          sync.Mutex
 }
 
 func NewCategoryService(categoryDB database.Category) *CategoryService {
 	return &CategoryService{
-		CategoryDB: categoryDB,
-		updateCh:   make(chan *pb.Category),
+		CategoryDB:  categoryDB,
+		subscribers: make(map[chan *pb.Category]struct{}),
 	}
 }
 
@@ -33,9 +35,7 @@ func (c *CategoryService) CreateCategory(ctx context.Context, in *pb.CreateCateg
 		Description: category.Description,
 	}
 
-	go func() {
-		c.updateCh <- categoryResponse
-	}()
+	go c.broadcast(categoryResponse)
 
 	return categoryResponse, nil
 }
@@ -77,19 +77,49 @@ func (c *CategoryService) ListCategoriesStream(in *pb.Blank, stream pb.CategoryS
 		}
 	}
 
+	// Novo canal para este cliente
+	clientCh := make(chan *pb.Category, 10)
+	c.addSubscriber(clientCh)
+	defer c.removeSubscriber(clientCh)
+
 	ctx := stream.Context()
 
-	// Mantém o stream aberto para enviar futuras atualizações
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-
-		case newCategory := <-c.updateCh:
-			err := stream.Send(newCategory)
-			if err != nil {
+		case newCategory := <-clientCh:
+			if err := stream.Send(newCategory); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+func (c *CategoryService) addSubscriber(ch chan *pb.Category) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.subscribers[ch] = struct{}{}
+}
+
+func (c *CategoryService) removeSubscriber(ch chan *pb.Category) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.subscribers, ch)
+	close(ch)
+}
+
+func (c *CategoryService) broadcast(category *pb.Category) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for ch := range c.subscribers {
+		select {
+		case ch <- category:
+		default:
+			// Canal cheio ou desconectado, remover
+			delete(c.subscribers, ch)
+			close(ch)
 		}
 	}
 }
