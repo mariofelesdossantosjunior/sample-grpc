@@ -11,11 +11,13 @@ import (
 type CategoryService struct {
 	pb.UnimplementedCategoryServiceServer
 	CategoryDB database.Category
+	updateCh   chan *pb.Category
 }
 
 func NewCategoryService(categoryDB database.Category) *CategoryService {
 	return &CategoryService{
 		CategoryDB: categoryDB,
+		updateCh:   make(chan *pb.Category),
 	}
 }
 
@@ -30,6 +32,10 @@ func (c *CategoryService) CreateCategory(ctx context.Context, in *pb.CreateCateg
 		Name:        category.Name,
 		Description: category.Description,
 	}
+
+	go func() {
+		c.updateCh <- categoryResponse
+	}()
 
 	return categoryResponse, nil
 }
@@ -51,6 +57,41 @@ func (c *CategoryService) ListCategories(ctx context.Context, in *pb.Blank) (*pb
 	}
 
 	return &pb.CategoryList{Categories: categoryResponses}, nil
+}
+
+func (c *CategoryService) ListCategoriesStream(in *pb.Blank, stream pb.CategoryService_ListCategoriesStreamServer) error {
+	categories, err := c.CategoryDB.FindAll()
+	if err != nil {
+		return err
+	}
+
+	// Envia categorias existentes, uma por uma
+	for _, category := range categories {
+		err := stream.Send(&pb.Category{
+			Id:          category.ID,
+			Name:        category.Name,
+			Description: category.Description,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
+	ctx := stream.Context()
+
+	// Mantém o stream aberto para enviar futuras atualizações
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case newCategory := <-c.updateCh:
+			err := stream.Send(newCategory)
+			if err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (c *CategoryService) GetCategory(ctx context.Context, in *pb.CategoryId) (*pb.Category, error) {
